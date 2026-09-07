@@ -1,130 +1,73 @@
-[![hacs_badge](https://img.shields.io/badge/My_HACS-Azure_OpenAI_Conversation-41BDF5?logo=homeassistant&logoColor=white)](https://my.home-assistant.io/redirect/hacs_repository/?owner=joselcaguilar&repository=azure-openai-ha&category=integration)
-[![Validate workflow](https://img.shields.io/github/actions/workflow/status/joselcaguilar/azure-openai-ha/validate.yaml?label=Validate&logo=GitHub)](https://github.com/joselcaguilar/azure-openai-ha/actions/workflows/validate.yaml)
-[![Lint workflow](https://img.shields.io/github/actions/workflow/status/joselcaguilar/azure-openai-ha/lint.yaml?label=Lint&logo=GitHub)](https://github.com/joselcaguilar/azure-openai-ha/actions/workflows/lint.yaml)
-![GitHub all releases](https://img.shields.io/github/downloads/joselcaguilar/azure-openai-ha/total?color=d9810f&label=Downloads&logo=GitHub)
-[![GitHub Sponsor](https://img.shields.io/static/v1?label=Sponsor&message=%E2%9D%A4&logo=GitHub&color=%23fe8e86)](https://github.com/sponsors/joselcaguilar)
-[![BuyMeACoffee](https://img.shields.io/badge/-Buy_me_a%C2%A0coffee-gray?logo=buy-me-a-coffee)](https://www.buymeacoffee.com/joselcaguilar)
+# Azure OpenAI Conversation for Home Assistant
 
-<p align="center">
-<img src="https://raw.githubusercontent.com/joselcaguilar/azure-openai-ha/main/.attachments/icon.png#gh-light-mode-only">
-<img src="https://raw.githubusercontent.com/joselcaguilar/azure-openai-ha/main/.attachments/dark_icon.png#gh-dark-mode-only">
-</p>
+A small Home Assistant custom integration that provides an Assist conversation
+agent backed by an Azure OpenAI model deployment.
 
-<h3 align="center">
+The integration uses Azure's OpenAI-compatible **Responses API** at
+`/openai/v1/responses`. It intentionally sends only model-neutral request options,
+so Azure deployment names for GPT-4.1, GPT-5, o-series, and later compatible
+models do not depend on fragile name detection.
 
-[Azure OpenAI Conversation Custom Integration](https://github.com/joselcaguilar/azure-openai-ha) for Home Assistant
-</h3>
+## Requirements
 
-# What This Is
+- Home Assistant 2026.9.1 or newer
+- An Azure OpenAI resource and API key
+- A model deployment in a region that supports the Responses API
 
-This custom integration adds a conversation agent powered by [Azure OpenAI](https://azure.microsoft.com/products/cognitive-services/openai-service) in Home Assistant, it's based on the original [OpenAI Conversation integration](https://www.home-assistant.io/integrations/openai_conversation/) for Home Assistant.
+Both Azure endpoint forms are supported:
 
-# What It Does
+- `https://<resource>.openai.azure.com`
+- `https://<resource>.services.ai.azure.com`
 
-This is equivalent to the built-in [OpenAI Conversation integration](https://www.home-assistant.io/integrations/openai_conversation/). The difference is that it uses the OpenAI algorithms available through Azure. Other than that the goal is to keep the differences to a minimum. You can use this conversation integration with Assistants in Home Assistant to control you house. They have all the capabilities the built-in OpenAI Conversation integration has.
+Enter the resource endpoint only. The integration adds `/openai/v1/` when needed.
 
-# Limitations
+## Installation
 
-<center>
+### HACS
 
-| Azure OpenAI Conversation Version | Home Assistant Version | Minimal API Version    |
-| --------------------------------- | ---------------------- | ---------------------- |
-| 0.x.y                             | 2023.4.x               | 2023-06-01-preview     |
-| 1.x.y                             | 2023.5+                | 2023-06-01-preview     |
-| 2.x.y                             | 2025.1                 | 2023-12-01-preview     |
-| 3.1.y                             | 2025.6                 | - no need to specify - |
-| 4.0.y                             | 2025.8 - 2025.9        | - no need to specify - |
-| 4.1.y                             | 2025.10+               | - no need to specify - |
-| 4.2.y                             | 2025.12+               | - no need to specify - |
-| 4.3.y                             | 2026.2.1+              | - no need to specify - |
+Add `https://github.com/rrudduck/azure-openai-ha` as a custom integration
+repository in HACS, install **Azure OpenAI Conversation**, and restart Home
+Assistant.
 
-</center>
+### Manual
 
-# Installation and Configuration
+Copy `custom_components/azure_openai_conversation` into the same path below your
+Home Assistant configuration directory, then restart Home Assistant.
 
-## Configuring Azure Models
+## Configuration
 
-1. Deploy an [Azure AI Foundry](https://portal.azure.com/#create/Microsoft.CognitiveServicesAIFoundry) instance to a **region supported by the [Responses API](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/responses?tabs=python-secure#region-availability)**.  
-   *(If you already have a Foundry instance, you can skip this step.)*
-2. To enable conversations, [deploy a chat completion model](http://learn.microsoft.com/en-us/azure/ai-foundry/foundry-models/how-to/deploy-foundry-models?view=foundry&preserve-view=true#deploy-a-model) (such as `gpt-4o-mini` or `gpt-4.1-mini`)  
-   *If your model is not the default `gpt-4o-mini`, you’ll need to configure it later in step 6.*
-3. If you want to generate images using the `generate_image` service, also deploy the `dall-e-3` model.
+1. Open **Settings → Devices & services → Add integration**.
+2. Select **Azure OpenAI Conversation**.
+3. Enter the Azure resource endpoint and API key.
+4. Configure the integration and set **Azure deployment name** to the deployment
+   name from Azure AI Foundry.
+5. Select the resulting conversation agent in your Assist pipeline.
 
-## Setting Up the Integration
+The options page also controls the instructions, Home Assistant tool access,
+maximum output tokens, and optional Azure web search. Web search must be supported
+by the selected Azure deployment and region.
 
-4. Download and install the integration from HACS: [Azure OpenAI Conversation](https://my.home-assistant.io/redirect/hacs_repository/?owner=joselcaguilar&repository=azure-openai-ha&category=integration).
-5. Restart your Home Assistant instance.
-6. [Click here](https://my.home-assistant.io/redirect/config_flow_start/?domain=azure_openai_conversation) or go to **Settings → Devices & Services → Add Integration → Azure OpenAI Conversation**.
-7. Enter your `API Key` and `API Base URL` (use the format `https://your-resource.services.ai.azure.com/`) and hit **Submit**.
-8. Configure your assistant to use the Azure OpenAI Conversation.
+## Model compatibility
 
-#  Options
+The integration does not send `temperature`, `top_p`, or a guessed reasoning
+configuration. Those values are not portable across current Azure OpenAI models,
+especially when the Azure deployment name does not reveal the underlying model.
+Reasoning models use their server-side defaults.
 
-Options for Azure OpenAI Conversation can be set via the user interface, by taking the following steps:
+Responses are stateless (`store: false`). Encrypted reasoning items are retained
+in Home Assistant's chat log and passed back to Azure, which preserves tool-call
+context without storing conversations in the Azure service.
 
-1. Browse to your Home Assistant instance.
-2. In the sidebar click on [Settings -> Devices & Services](https://my.home-assistant.io/redirect/integrations/).
-3. Find the Azure Open AI Conversation integration and click 'Configure'
+## Development
 
-Options available (same as built-in OpenAI conversation):
-- **Instructions:**
-The starting text for the AI language model to generate new text from. This text can include information about your Home Assistant instance, devices, and areas and is written using [Home Assistant Templating](https://www.home-assistant.io/docs/configuration/templating).
+Run the repository checks with Docker:
 
-- **Model:** The name of the GPT language model deployed for text generation (i.e.- `my-gpt35-model`). You can find more details on the available models in the [Azure OpenAI Documentation](https://learn.microsoft.com/azure/cognitive-services/openai/concepts/models#finding-what-models-are-available). If you are having issues using an assistant that uses this integration please check this model is the model you actually deployed.
+```sh
+make test
+```
 
-- **Maximum Tokens to Return in Response**
-The maximum number of words or "tokens" that the AI model should generate in its completion of the prompt. For more information, see the [Azure OpenAI Completion Documentation](https://learn.microsoft.com/azure/cognitive-services/openai/overview#tokens).
+The checks run Ruff, Home Assistant hassfest, and HACS validation.
 
-- **Temperature:** A value that determines the level of creativity and risk-taking the model should use when generating text. A higher temperature means the model is more likely to generate unexpected results, while a lower temperature results in more deterministic results. See the [Azure OpenAI Completion Documentation](https://learn.microsoft.com/azure/cognitive-services/openai/how-to/completions) for more information.
+## License
 
-- **Top P:** An alternative to temperature, top_p determines the proportion of the most likely word choices the model should consider when generating text. A higher top_p means the model will only consider the most likely words, while a lower top_p means a wider range of words, including less likely ones, will be considered. For more information, see the [Azure OpenAI Completion Documentation](https://learn.microsoft.com/azure/cognitive-services/openai/how-to/completions).
-
-## API Version change
-
-This value couldn't be changed through options, to update it you must need to delete and recreate the integration. Make sure that you have all required values like API key saved before recreation.
-
-# Changelog
-
-Please reference the [release history](https://github.com/joselcaguilar/azure-openai-ha/releases).
-
-# How to Help
-
-While it'd be nice to have more developers, you can contribute without knowing how to code. You can [file bugs/feature requests](https://github.com/joselcaguilar/azure-openai-ha/issues), or you can help with other tasks like [UI Translations](#ui-translations) and updating the [README](./README.md).
-
-## Getting Started (Developers)
-
-1. Clone the repository and move into it.
-2. Copy the environment template and set your GitHub token (required for HACS checks):
-   - `cp .env.example .env`
-   - set `GITHUB_TOKEN` in `.env` with read-only access to **Contents** and **Metadata**.
-3. Run local checks using Docker:
-   - `make lint` runs Ruff
-   - `make hassfest` runs Home Assistant integration validation
-   - `make hacs` runs HACS validation
-   - `make test` runs all of the above
-4. (Optional) Start Home Assistant locally for manual testing:
-   - `docker compose up -d homeassistant`
-   - Integration files are mounted from `./custom_components/azure_openai_conversation` into the container.
-
-## UI Translations
-
-More languages can be added [here](./custom_components/azure_openai_conversation/translations), contributions are welcome :)
-
-Languages available:
-- English
-
-## Documentation
-
-The [README](./README.md) file will be used for Documentation, if it's expanded in the future with automations or other tweaks, we can think on a wiki for that purpose.
-
-> **Disclaimer:** Don't worry about making mistakes as we can revert using the history 😊.
-
-# Funding
-
-|                                                                      GitHub                                                                       |                                                            Buy me a coffee                                                             |
-| :-----------------------------------------------------------------------------------------------------------------------------------------------: | :------------------------------------------------------------------------------------------------------------------------------------: |
-| <a href="https://github.com/sponsors/joselcaguilar"><img src="https://i.imgur.com/v2T6P4w.png" alt="GitHub Sponsor" width="100" height="100"></a> | [![Buy Me A Coffee](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/joselcaguilar) |
-
-# License
-
-[MIT](LICENSE) - By providing a contribution, you agree the contribution is licensed under MIT.
+[MIT](LICENSE)

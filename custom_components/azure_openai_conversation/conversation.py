@@ -1,9 +1,10 @@
-"""Conversation support for OpenAI."""
+"""Conversation support for Azure OpenAI."""
 
-from collections.abc import AsyncGenerator, Callable
-from datetime import date, datetime, time
+from __future__ import annotations
+
+from collections.abc import AsyncGenerator, Callable, Iterable
 import json
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 import openai
 from openai._streaming import AsyncStream
@@ -17,12 +18,13 @@ from openai.types.responses import (
     ResponseFunctionCallArgumentsDoneEvent,
     ResponseFunctionToolCall,
     ResponseFunctionToolCallParam,
+    ResponseFunctionWebSearch,
+    ResponseFunctionWebSearchParam,
     ResponseIncompleteEvent,
     ResponseInputParam,
     ResponseOutputItemAddedEvent,
     ResponseOutputItemDoneEvent,
     ResponseOutputMessage,
-    ResponseOutputMessageParam,
     ResponseReasoningItem,
     ResponseReasoningItemParam,
     ResponseStreamEvent,
@@ -31,183 +33,208 @@ from openai.types.responses import (
     WebSearchToolParam,
 )
 from openai.types.responses.response_input_param import FunctionCallOutput
-from openai.types.responses.web_search_tool_param import UserLocation
-from voluptuous_openapi import convert
+from probatio import to_openapi
 
 from homeassistant.components import conversation
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_LLM_HASS_API, MATCH_ALL
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import device_registry as dr, intent, llm
+from homeassistant.helpers import device_registry as dr, llm
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.json import json_dumps
 
-from . import OpenAIConfigEntry
+from . import AzureOpenAIConfigEntry
 from .const import (
     CONF_CHAT_MODEL,
     CONF_MAX_TOKENS,
     CONF_PROMPT,
-    CONF_REASONING_EFFORT,
-    CONF_TEMPERATURE,
-    CONF_TOP_P,
     CONF_WEB_SEARCH,
-    CONF_WEB_SEARCH_CITY,
     CONF_WEB_SEARCH_CONTEXT_SIZE,
-    CONF_WEB_SEARCH_COUNTRY,
-    CONF_WEB_SEARCH_REGION,
-    CONF_WEB_SEARCH_TIMEZONE,
-    CONF_WEB_SEARCH_USER_LOCATION,
     DOMAIN,
     LOGGER,
     RECOMMENDED_CHAT_MODEL,
     RECOMMENDED_MAX_TOKENS,
-    RECOMMENDED_REASONING_EFFORT,
-    RECOMMENDED_TEMPERATURE,
-    RECOMMENDED_TOP_P,
     RECOMMENDED_WEB_SEARCH_CONTEXT_SIZE,
 )
 
-# Max number of back and forth with the LLM to generate a response
 MAX_TOOL_ITERATIONS = 10
-
-
-def _json_default(value: Any) -> str:
-    """Serialize values that appear in Home Assistant tool responses."""
-    if isinstance(value, (datetime, date, time)):
-        return value.isoformat()
-    return str(value)
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: OpenAIConfigEntry,
+    config_entry: AzureOpenAIConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up conversation entities."""
-    agent = AzureOpenAIConversationEntity(config_entry)
-    async_add_entities([agent])
+    """Set up the Azure OpenAI conversation entity."""
+    async_add_entities([AzureOpenAIConversationEntity(config_entry)])
 
 
 def _format_tool(
     tool: llm.Tool, custom_serializer: Callable[[Any], Any] | None
 ) -> FunctionToolParam:
-    """Format tool specification."""
-
-    def _to_azure_tool_schema(schema: Any) -> dict[str, Any]:
-        """Normalize schema to Azure/OpenAI function-tool requirements.
-
-        Azure rejects top-level oneOf/anyOf/allOf/enum/not and requires
-        an object at the top level.
-        """
-        if not isinstance(schema, dict):
-            return {"type": "object", "properties": {}}
-
-        normalized = dict(schema)
-
-        # HA tool schemas can be emitted as anyOf(object, null) for optional
-        # argument groups. Azure requires a top-level object.
-        for combiner in ("anyOf", "oneOf", "allOf"):
-            variants = normalized.get(combiner)
-            if isinstance(variants, list):
-                object_variant = next(
-                    (
-                        variant
-                        for variant in variants
-                        if isinstance(variant, dict)
-                        and (
-                            variant.get("type") == "object"
-                            or "properties" in variant
-                        )
-                    ),
-                    None,
-                )
-                if object_variant is not None:
-                    normalized = {**normalized, **object_variant}
-                normalized.pop(combiner, None)
-
-        normalized.pop("enum", None)
-        normalized.pop("not", None)
-
-        if normalized.get("type") != "object":
-            normalized["type"] = "object"
-
-        normalized.setdefault("properties", {})
-        return normalized
+    """Convert a Home Assistant tool schema to an OpenAI function tool."""
+    unsupported_keys = {"oneOf", "anyOf", "allOf", "enum", "not"}
+    schema = to_openapi(tool.parameters, custom_serializer=custom_serializer)
+    if unsupported_keys.intersection(schema):
+        schema = {key: value for key, value in schema.items() if key not in unsupported_keys}
+    schema.setdefault("type", "object")
+    schema.setdefault("properties", {})
 
     return FunctionToolParam(
         type="function",
         name=tool.name,
-        parameters=_to_azure_tool_schema(
-            convert(tool.parameters, custom_serializer=custom_serializer)
-        ),
+        parameters=schema,
         description=tool.description,
         strict=False,
     )
 
 
 def _convert_content_to_param(
-    content: conversation.Content,
+    chat_content: Iterable[conversation.Content],
 ) -> ResponseInputParam:
-    """Convert any native chat message for this agent to the native format."""
+    """Convert Home Assistant chat content to Responses API input."""
     messages: ResponseInputParam = []
-    if isinstance(content, conversation.ToolResultContent):
-        return [
-            FunctionCallOutput(
-                type="function_call_output",
-                call_id=content.tool_call_id,
-                output=json.dumps(content.tool_result, default=_json_default),
-            )
-        ]
+    web_search_calls: dict[str, ResponseFunctionWebSearchParam] = {}
 
-    if content.content:
-        role: Literal["user", "assistant", "system", "developer"] = content.role
-        if role == "system":
-            role = "developer"
-        messages.append(
-            EasyInputMessageParam(type="message", role=role, content=content.content)
-        )
+    for content in chat_content:
+        if isinstance(content, conversation.ToolResultContent):
+            if (
+                content.tool_name == "web_search_call"
+                and content.tool_call_id in web_search_calls
+            ):
+                web_search_call = web_search_calls.pop(content.tool_call_id)
+                web_search_call["status"] = content.tool_result.get(  # type: ignore[typeddict-item]
+                    "status", "completed"
+                )
+                messages.append(web_search_call)
+            else:
+                messages.append(
+                    FunctionCallOutput(
+                        type="function_call_output",
+                        call_id=content.tool_call_id,
+                        output=json_dumps(content.tool_result),
+                    )
+                )
+            continue
 
-    if isinstance(content, conversation.AssistantContent) and content.tool_calls:
-        messages.extend(
-            ResponseFunctionToolCallParam(
-                type="function_call",
-                name=tool_call.tool_name,
-                arguments=json.dumps(tool_call.tool_args),
-                call_id=tool_call.id,
+        if content.content:
+            role: Literal["user", "assistant", "system", "developer"] = content.role
+            if role == "system":
+                role = "developer"
+            messages.append(
+                EasyInputMessageParam(
+                    type="message", role=role, content=content.content
+                )
             )
-            for tool_call in content.tool_calls
-        )
+
+        if not isinstance(content, conversation.AssistantContent):
+            continue
+
+        for tool_call in content.tool_calls or ():
+            if (
+                tool_call.external
+                and tool_call.tool_name == "web_search_call"
+                and "action" in tool_call.tool_args
+            ):
+                web_search_calls[tool_call.id] = ResponseFunctionWebSearchParam(
+                    type="web_search_call",
+                    id=tool_call.id,
+                    action=tool_call.tool_args["action"],
+                    status="completed",
+                )
+            else:
+                messages.append(
+                    ResponseFunctionToolCallParam(
+                        type="function_call",
+                        name=tool_call.tool_name,
+                        arguments=json_dumps(tool_call.tool_args),
+                        call_id=tool_call.id,
+                    )
+                )
+
+        if isinstance(content.native, ResponseReasoningItem):
+            messages.append(
+                ResponseReasoningItemParam(
+                    type="reasoning",
+                    id=content.native.id,
+                    summary=[],
+                    encrypted_content=content.native.encrypted_content,
+                )
+            )
+
     return messages
+
+
+def _trace_usage(
+    chat_log: conversation.ChatLog,
+    event: ResponseCompletedEvent | ResponseIncompleteEvent | ResponseFailedEvent,
+) -> None:
+    """Add token usage to the Home Assistant conversation trace."""
+    if event.response.usage is not None:
+        chat_log.async_trace(
+            {
+                "stats": {
+                    "input_tokens": event.response.usage.input_tokens,
+                    "output_tokens": event.response.usage.output_tokens,
+                }
+            }
+        )
 
 
 async def _transform_stream(
     chat_log: conversation.ChatLog,
-    result: AsyncStream[ResponseStreamEvent],
-    messages: ResponseInputParam,
-) -> AsyncGenerator[conversation.AssistantContentDeltaDict]:
-    """Transform an OpenAI delta stream into HA format."""
-    async for event in result:
+    stream: AsyncStream[ResponseStreamEvent],
+) -> AsyncGenerator[
+    conversation.AssistantContentDeltaDict | conversation.ToolResultContentDeltaDict
+]:
+    """Transform a Responses API stream into Home Assistant chat content."""
+    last_role: Literal["assistant", "tool_result"] | None = None
+
+    async for event in stream:
         LOGGER.debug("Received event: %s", event)
 
         if isinstance(event, ResponseOutputItemAddedEvent):
-            if isinstance(event.item, ResponseOutputMessage):
-                yield {"role": event.item.role}
-            elif isinstance(event.item, ResponseFunctionToolCall):
-                # OpenAI has tool calls as individual events
-                # while HA puts tool calls inside the assistant message.
-                # We turn them into individual assistant content for HA
-                # to ensure that tools are called as soon as possible.
+            if isinstance(event.item, ResponseFunctionToolCall):
                 yield {"role": "assistant"}
+                last_role = "assistant"
                 current_tool_call = event.item
+            elif isinstance(
+                event.item, (ResponseOutputMessage, ResponseReasoningItem)
+            ) and last_role != "assistant":
+                yield {"role": "assistant"}
+                last_role = "assistant"
         elif isinstance(event, ResponseOutputItemDoneEvent):
-            item = event.item.model_dump()
-            item.pop("status", None)
             if isinstance(event.item, ResponseReasoningItem):
-                messages.append(cast(ResponseReasoningItemParam, item))
-            elif isinstance(event.item, ResponseOutputMessage):
-                messages.append(cast(ResponseOutputMessageParam, item))
-            elif isinstance(event.item, ResponseFunctionToolCall):
-                messages.append(cast(ResponseFunctionToolCallParam, item))
+                yield {
+                    "native": ResponseReasoningItem(
+                        type="reasoning",
+                        id=event.item.id,
+                        summary=[],
+                        encrypted_content=event.item.encrypted_content,
+                    )
+                }
+            elif isinstance(event.item, ResponseFunctionWebSearch):
+                yield {
+                    "tool_calls": [
+                        llm.ToolInput(
+                            id=event.item.id,
+                            tool_name="web_search_call",
+                            tool_args={
+                                "action": event.item.action.to_dict()
+                                if event.item.action
+                                else None
+                            },
+                            external=True,
+                        )
+                    ]
+                }
+                yield {
+                    "role": "tool_result",
+                    "tool_call_id": event.item.id,
+                    "tool_name": "web_search_call",
+                    "tool_result": {"status": event.item.status},
+                }
+                last_role = "tool_result"
         elif isinstance(event, ResponseTextDeltaEvent):
             yield {"content": event.delta}
         elif isinstance(event, ResponseFunctionCallArgumentsDeltaEvent):
@@ -224,53 +251,22 @@ async def _transform_stream(
                 ]
             }
         elif isinstance(event, ResponseCompletedEvent):
-            if event.response.usage is not None:
-                chat_log.async_trace(
-                    {
-                        "stats": {
-                            "input_tokens": event.response.usage.input_tokens,
-                            "output_tokens": event.response.usage.output_tokens,
-                        }
-                    }
-                )
+            _trace_usage(chat_log, event)
         elif isinstance(event, ResponseIncompleteEvent):
-            if event.response.usage is not None:
-                chat_log.async_trace(
-                    {
-                        "stats": {
-                            "input_tokens": event.response.usage.input_tokens,
-                            "output_tokens": event.response.usage.output_tokens,
-                        }
-                    }
-                )
-
-            if (
-                event.response.incomplete_details
-                and event.response.incomplete_details.reason
-            ):
-                reason: str = event.response.incomplete_details.reason
-            else:
-                reason = "unknown reason"
-
-            if reason == "max_output_tokens":
-                reason = "max output tokens reached"
-            elif reason == "content_filter":
-                reason = "content filter triggered"
-
+            _trace_usage(chat_log, event)
+            reason = (
+                event.response.incomplete_details.reason
+                if event.response.incomplete_details
+                else "unknown reason"
+            )
             raise HomeAssistantError(f"Azure OpenAI response incomplete: {reason}")
         elif isinstance(event, ResponseFailedEvent):
-            if event.response.usage is not None:
-                chat_log.async_trace(
-                    {
-                        "stats": {
-                            "input_tokens": event.response.usage.input_tokens,
-                            "output_tokens": event.response.usage.output_tokens,
-                        }
-                    }
-                )
-            reason = "unknown reason"
-            if event.response.error is not None:
-                reason = event.response.error.message
+            _trace_usage(chat_log, event)
+            reason = (
+                event.response.error.message
+                if event.response.error is not None
+                else "unknown reason"
+            )
             raise HomeAssistantError(f"Azure OpenAI response failed: {reason}")
         elif isinstance(event, ResponseErrorEvent):
             raise HomeAssistantError(f"Azure OpenAI response error: {event.message}")
@@ -285,38 +281,34 @@ class AzureOpenAIConversationEntity(
     _attr_name = None
     _attr_supports_streaming = True
 
-    def __init__(self, entry: OpenAIConfigEntry) -> None:
-        """Initialize the agent."""
+    def __init__(self, entry: AzureOpenAIConfigEntry) -> None:
+        """Initialize the conversation agent."""
         self.entry = entry
         self._attr_unique_id = entry.entry_id
         self._attr_device_info = dr.DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             name=entry.title,
-            manufacturer="Azure OpenAI",
-            model="Azure ChatGPT",
+            manufacturer="Microsoft Azure",
+            model="Azure OpenAI",
             entry_type=dr.DeviceEntryType.SERVICE,
         )
-        if self.entry.options.get(CONF_LLM_HASS_API):
+        if entry.options.get(CONF_LLM_HASS_API):
             self._attr_supported_features = (
                 conversation.ConversationEntityFeature.CONTROL
             )
 
     @property
     def supported_languages(self) -> list[str] | Literal["*"]:
-        """Return a list of supported languages."""
+        """Return the supported languages."""
         return MATCH_ALL
 
     async def async_added_to_hass(self) -> None:
-        """When entity is added to Home Assistant."""
+        """Register this entity as a conversation agent."""
         await super().async_added_to_hass()
-
         conversation.async_set_agent(self.hass, self.entry, self)
-        self.entry.async_on_unload(
-            self.entry.add_update_listener(self._async_entry_update_listener)
-        )
 
     async def async_will_remove_from_hass(self) -> None:
-        """When entity will be removed from Home Assistant."""
+        """Unregister this conversation agent."""
         conversation.async_unset_agent(self.hass, self.entry)
         await super().async_will_remove_from_hass()
 
@@ -325,118 +317,78 @@ class AzureOpenAIConversationEntity(
         user_input: conversation.ConversationInput,
         chat_log: conversation.ChatLog,
     ) -> conversation.ConversationResult:
-        """Process the user input and call the API."""
+        """Process user input with Azure OpenAI."""
         options = self.entry.options
-
         try:
-            await chat_log.async_update_llm_data(
-                DOMAIN,
-                user_input,
+            await chat_log.async_provide_llm_data(
+                user_input.as_llm_context(DOMAIN),
                 options.get(CONF_LLM_HASS_API),
                 options.get(CONF_PROMPT),
+                user_input.extra_system_prompt,
             )
         except conversation.ConverseError as err:
             return err.as_conversation_result()
 
         await self._async_handle_chat_log(chat_log)
+        return conversation.async_get_result_from_chat_log(user_input, chat_log)
 
-        intent_response = intent.IntentResponse(language=user_input.language)
-        assert type(chat_log.content[-1]) is conversation.AssistantContent
-        intent_response.async_set_speech(chat_log.content[-1].content or "")
-        return conversation.ConversationResult(
-            response=intent_response,
-            conversation_id=chat_log.conversation_id,
-            continue_conversation=chat_log.continue_conversation,
-        )
-
-    async def _async_handle_chat_log(
-        self,
-        chat_log: conversation.ChatLog,
-    ) -> None:
-        """Generate an answer for the chat log."""
+    async def _async_handle_chat_log(self, chat_log: conversation.ChatLog) -> None:
+        """Generate and stream a response for a Home Assistant chat log."""
         options = self.entry.options
+        messages = _convert_content_to_param(chat_log.content)
+        tools: list[ToolParam] = []
 
-        tools: list[ToolParam] | None = None
         if chat_log.llm_api:
-            tools = [
+            tools.extend(
                 _format_tool(tool, chat_log.llm_api.custom_serializer)
                 for tool in chat_log.llm_api.tools
-            ]
-
-        if options.get(CONF_WEB_SEARCH):
-            web_search = WebSearchToolParam(
-                type="web_search_preview",
-                search_context_size=options.get(
-                    CONF_WEB_SEARCH_CONTEXT_SIZE, RECOMMENDED_WEB_SEARCH_CONTEXT_SIZE
-                ),
             )
-            if options.get(CONF_WEB_SEARCH_USER_LOCATION):
-                web_search["user_location"] = UserLocation(
-                    type="approximate",
-                    city=options.get(CONF_WEB_SEARCH_CITY, ""),
-                    region=options.get(CONF_WEB_SEARCH_REGION, ""),
-                    country=options.get(CONF_WEB_SEARCH_COUNTRY, ""),
-                    timezone=options.get(CONF_WEB_SEARCH_TIMEZONE, ""),
+        if options.get(CONF_WEB_SEARCH):
+            tools.append(
+                WebSearchToolParam(
+                    type="web_search",
+                    search_context_size=options.get(
+                        CONF_WEB_SEARCH_CONTEXT_SIZE,
+                        RECOMMENDED_WEB_SEARCH_CONTEXT_SIZE,
+                    ),
                 )
-            if tools is None:
-                tools = []
-            tools.append(web_search)
+            )
 
-        model = options.get(CONF_CHAT_MODEL, RECOMMENDED_CHAT_MODEL)
-        messages = [
-            m
-            for content in chat_log.content
-            for m in _convert_content_to_param(content)
-        ]
+        model_args: dict[str, Any] = {
+            "model": options.get(CONF_CHAT_MODEL, RECOMMENDED_CHAT_MODEL),
+            "input": messages,
+            "max_output_tokens": options.get(
+                CONF_MAX_TOKENS, RECOMMENDED_MAX_TOKENS
+            ),
+            "user": chat_log.conversation_id,
+            "store": False,
+            "stream": True,
+            "include": ["reasoning.encrypted_content"],
+        }
+        if tools:
+            model_args["tools"] = tools
 
-        client = self.entry.runtime_data
-
-        # To prevent infinite loops, we limit the number of iterations
         for _iteration in range(MAX_TOOL_ITERATIONS):
-            model_args = {
-                "model": model,
-                "input": messages,
-                "max_output_tokens": options.get(
-                    CONF_MAX_TOKENS, RECOMMENDED_MAX_TOKENS
-                ),
-                "top_p": options.get(CONF_TOP_P, RECOMMENDED_TOP_P),
-                "temperature": options.get(CONF_TEMPERATURE, RECOMMENDED_TEMPERATURE),
-                "user": chat_log.conversation_id,
-                "stream": True,
-            }
-            if tools:
-                model_args["tools"] = tools
-
-            if model.startswith("o"):
-                model_args["reasoning"] = {
-                    "effort": options.get(
-                        CONF_REASONING_EFFORT, RECOMMENDED_REASONING_EFFORT
-                    )
-                }
-            else:
-                model_args["store"] = False
-
             try:
-                result = await client.responses.create(**model_args)
+                stream = await self.entry.runtime_data.responses.create(**model_args)
+                content_stream = chat_log.async_add_delta_content_stream(
+                    self.entity_id, _transform_stream(chat_log, stream)
+                )
+                messages.extend(
+                    _convert_content_to_param(
+                        [content async for content in content_stream]
+                    )
+                )
+            except openai.AuthenticationError as err:
+                self.entry.async_start_reauth(self.hass)
+                raise HomeAssistantError("Azure OpenAI authentication failed") from err
             except openai.RateLimitError as err:
-                LOGGER.error("Rate limited by Azure OpenAI: %s", err)
-                raise HomeAssistantError("Rate limited or insufficient funds") from err
+                raise HomeAssistantError(
+                    "Azure OpenAI rate limit or quota exceeded"
+                ) from err
             except openai.OpenAIError as err:
                 LOGGER.error("Error talking to Azure OpenAI: %s", err)
                 raise HomeAssistantError("Error talking to Azure OpenAI") from err
 
-            async for content in chat_log.async_add_delta_content_stream(
-                self.entity_id, _transform_stream(chat_log, result, messages)
-            ):
-                if not isinstance(content, conversation.AssistantContent):
-                    messages.extend(_convert_content_to_param(content))
-
             if not chat_log.unresponded_tool_results:
                 break
-
-    async def _async_entry_update_listener(
-        self, hass: HomeAssistant, entry: ConfigEntry
-    ) -> None:
-        """Handle options update."""
-        # Reload as we update device info + entity name + supported features
-        await hass.config_entries.async_reload(entry.entry_id)

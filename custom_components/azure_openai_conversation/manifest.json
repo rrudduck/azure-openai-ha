@@ -2,13 +2,13 @@
   "domain": "azure_openai_conversation",
   "name": "Azure OpenAI Conversation",
   "after_dependencies": ["assist_pipeline", "intent"],
-  "codeowners": ["@joselcaguilar"],
+  "codeowners": ["@rrudduck"],
   "config_flow": true,
   "dependencies": ["conversation"],
-  "documentation": "https://github.com/joselcaguilar/azure-openai-ha",
+  "documentation": "https://github.com/rrudduck/azure-openai-ha",
   "integration_type": "service",
   "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/joselcaguilar/azure-openai-ha/issues",
-  "requirements": ["openai>=2.15.0,<3.0.0"],
-  "version": "2026.02.0"
+  "issue_tracker": "https://github.com/rrudduck/azure-openai-ha/issues",
+  "requirements": ["openai>=2.45.0,<3.0.0"],
+  "version": "2026.09.0"
 }
