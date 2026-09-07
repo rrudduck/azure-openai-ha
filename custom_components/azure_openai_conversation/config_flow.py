@@ -20,8 +20,6 @@ from homeassistant.const import CONF_API_KEY, CONF_LLM_HASS_API
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import llm
 from homeassistant.helpers.selector import (
-    NumberSelector,
-    NumberSelectorConfig,
     SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
@@ -71,7 +69,7 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> None:
 class AzureOpenAIConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Azure OpenAI Conversation."""
 
-    VERSION = 2
+    VERSION = 3
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -186,7 +184,7 @@ class AzureOpenAIOptionsFlow(OptionsFlow):
                 CONF_MAX_TOKENS,
                 description={"suggested_value": options.get(CONF_MAX_TOKENS)},
                 default=RECOMMENDED_MAX_TOKENS,
-            ): NumberSelector(NumberSelectorConfig(min=1, max=32768)),
+            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=32768)),
             vol.Optional(
                 CONF_WEB_SEARCH,
                 description={"suggested_value": options.get(CONF_WEB_SEARCH)},

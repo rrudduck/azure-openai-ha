@@ -86,8 +86,8 @@ async def async_unload_entry(
 async def async_migrate_entry(
     hass: HomeAssistant, entry: AzureOpenAIConfigEntry
 ) -> bool:
-    """Remove options from the retired Chat Completions-era configuration."""
-    if entry.version != 1:
+    """Normalize options from earlier integration versions."""
+    if entry.version > 2:
         return True
 
     retired_options = {
@@ -110,12 +110,13 @@ async def async_migrate_entry(
         options[CONF_LLM_HASS_API] = [options[CONF_LLM_HASS_API]]
     options.setdefault(CONF_CHAT_MODEL, RECOMMENDED_CHAT_MODEL)
     options.setdefault(CONF_MAX_TOKENS, RECOMMENDED_MAX_TOKENS)
+    options[CONF_MAX_TOKENS] = int(options[CONF_MAX_TOKENS])
     options.setdefault(CONF_WEB_SEARCH, RECOMMENDED_WEB_SEARCH)
     options.setdefault(
         CONF_WEB_SEARCH_CONTEXT_SIZE, RECOMMENDED_WEB_SEARCH_CONTEXT_SIZE
     )
 
-    hass.config_entries.async_update_entry(entry, options=options, version=2)
+    hass.config_entries.async_update_entry(entry, options=options, version=3)
     return True
 
 

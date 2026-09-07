@@ -357,8 +357,8 @@ class AzureOpenAIConversationEntity(
         model_args: dict[str, Any] = {
             "model": options.get(CONF_CHAT_MODEL, RECOMMENDED_CHAT_MODEL),
             "input": messages,
-            "max_output_tokens": options.get(
-                CONF_MAX_TOKENS, RECOMMENDED_MAX_TOKENS
+            "max_output_tokens": int(
+                options.get(CONF_MAX_TOKENS, RECOMMENDED_MAX_TOKENS)
             ),
             "user": chat_log.conversation_id,
             "store": False,
