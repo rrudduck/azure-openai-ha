@@ -11,7 +11,7 @@ from homeassistant.const import CONF_API_KEY, CONF_LLM_HASS_API, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.httpx_client import get_async_client
+from homeassistant.helpers.httpx2_client import get_async_client
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
