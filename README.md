@@ -10,7 +10,7 @@ models do not depend on fragile name detection.
 
 ## Requirements
 
-- Home Assistant 2026.10 or newer (native HTTPX2 client helper)
+- Home Assistant 2026.10 or newer
 - OpenAI Python SDK 3.10 or newer, below 4.0 (installed by Home Assistant)
 - An Azure OpenAI resource and API key
 - A model deployment in a region that supports the Responses API

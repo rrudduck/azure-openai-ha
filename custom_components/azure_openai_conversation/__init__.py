@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Any, cast
 
 import openai
 
@@ -11,7 +12,7 @@ from homeassistant.const import CONF_API_KEY, CONF_LLM_HASS_API, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.httpx2_client import get_async_client
+from homeassistant.helpers.httpx_client import get_async_client
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
@@ -48,7 +49,7 @@ def create_client(
     return openai.AsyncOpenAI(
         api_key=data[CONF_API_KEY],
         base_url=normalize_azure_endpoint(data[CONF_API_BASE]),
-        http_client=get_async_client(hass),
+        http_client=cast(Any, get_async_client(hass)),
     )
 
 
