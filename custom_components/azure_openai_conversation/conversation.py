@@ -103,7 +103,7 @@ def _convert_content_to_param(
                 and content.tool_call_id in web_search_calls
             ):
                 web_search_call = web_search_calls.pop(content.tool_call_id)
-                web_search_call["status"] = content.result.get(  # type: ignore[typeddict-item]
+                web_search_call["status"] = content.result.data.get(  # type: ignore[typeddict-item]
                     "status", "completed"
                 )
                 messages.append(web_search_call)
@@ -112,7 +112,7 @@ def _convert_content_to_param(
                     FunctionCallOutput(
                         type="function_call_output",
                         call_id=content.tool_call_id,
-                        output=json_dumps(content.result),
+                        output=json_dumps(content.result.data),
                     )
                 )
             continue

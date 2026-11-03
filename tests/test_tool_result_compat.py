@@ -10,7 +10,7 @@ class ToolResult:
     def __init__(self, name, result):
         self.tool_name = name
         self.tool_call_id = 'call-1'
-        self.result = result
+        self.result = SimpleNamespace(data=result, error=False)
 
     @property
     def tool_result(self):
